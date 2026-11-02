@@ -1,0 +1,953 @@
+"""FastMCP server for Adobe Substance 3D Painter."""
+
+from __future__ import annotations
+
+import base64
+import os
+from typing import Any
+
+from mcp.server.fastmcp import FastMCP, Image
+
+from .client import PainterRemote
+from .operations import PainterOperations
+
+
+mcp = FastMCP(
+    "Substance Painter",
+    instructions=(
+        "Control the locally running Adobe Substance 3D Painter instance. "
+        "Use UIDs from list_layers for edits because layer names may be duplicated. "
+        "Bake mesh maps before using generators, since curvature and ambient occlusion "
+        "drive wear; mask effects blend together, so a position generator multiplied over "
+        "a wear generator biases wear up or down the model. Tiling or overlapping UVs can't "
+        "be baked or textured: unwrap first. Black patches on overlapping parts usually "
+        "mean the bake distance is too big, so lower MaxHeight and MaxDepth with "
+        "configure_baking. Look at the result with capture_viewport, capture_turntable or "
+        "capture_channel after each change instead of judging from parameter values. "
+        "Roblox textures: export_with_profile with profile='roblox'."
+    ),
+)
+operations = PainterOperations(PainterRemote())
+
+
+@mcp.tool()
+def painter_status() -> dict[str, Any]:
+    """Check the connection and report Painter, Python API, and project status."""
+    return operations.status()
+
+
+def _jpeg(capture: str) -> Image:
+    return Image(data=base64.b64decode(capture), format="jpeg")
+
+
+@mcp.tool(structured_output=False)
+def capture_viewport(view: str = "3d", max_size: int = 1400) -> Image:
+    """Look at Painter. view="3d" is the model; view="window" includes the whole UI."""
+    return _jpeg(operations.capture_viewport(view, max_size))
+
+
+@mcp.tool(structured_output=False)
+def capture_turntable(
+    angles: list[float] | None = None,
+    elevation: float = 15.0,
+    zoom: float = 1.0,
+    max_size: int = 1000,
+    focus: list[float] | None = None,
+) -> list[Image]:
+    """See every side: orbit the camera, capture each yaw angle, then restore the view.
+
+    zoom above 1 moves closer. A negative elevation looks up from below. focus is the
+    [x, y, z] point to orbit, for close-ups of one part; it defaults to the model's center.
+    """
+    return [
+        _jpeg(item)
+        for item in operations.capture_turntable(angles, elevation, zoom, max_size, focus)
+    ]
+
+
+@mcp.tool(structured_output=False)
+def capture_channel(
+    texture_set: str, channel: str = "BaseColor", size_log2: int = 10
+) -> Image:
+    """See one flattened channel as a flat texture, for example Roughness or Normal."""
+    return _jpeg(operations.capture_channel(texture_set, channel, size_log2))
+
+
+@mcp.tool()
+def close_project(discard_unsaved: bool = False) -> dict[str, Any]:
+    """Close the open project; refuses unsaved work unless discard_unsaved=true."""
+    return operations.close_project(discard_unsaved)
+
+
+@mcp.tool()
+def export_mesh(output_path: str, overwrite: bool = False) -> dict[str, Any]:
+    """Export the project mesh, with any Auto UV result, inside SP_MCP_EXPORT_ROOTS."""
+    return operations.export_mesh(output_path, overwrite)
+
+
+@mcp.tool()
+def get_project_info() -> dict[str, Any]:
+    """Return the current project path and texture-set names."""
+    return operations.project_info()
+
+
+@mcp.tool()
+def plan_project_creation(
+    mesh_file_path: str,
+    output_path: str,
+    mesh_map_file_paths: list[str] | None = None,
+    template_file_path: str | None = None,
+    settings: dict[str, Any] | None = None,
+    overwrite: bool = False,
+    replace_current: bool = False,
+    backup_current_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+) -> dict[str, Any]:
+    """Validate a new project, typed import settings, context switch, and backup."""
+    return operations.plan_project_creation(
+        mesh_file_path,
+        output_path,
+        mesh_map_file_paths,
+        template_file_path,
+        settings,
+        overwrite,
+        replace_current,
+        backup_current_path,
+        backup_mode,
+        overwrite_backup,
+    )
+
+
+@mcp.tool()
+def create_project(
+    mesh_file_path: str,
+    output_path: str,
+    mesh_map_file_paths: list[str] | None = None,
+    template_file_path: str | None = None,
+    settings: dict[str, Any] | None = None,
+    overwrite: bool = False,
+    replace_current: bool = False,
+    backup_current_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Back up an optional current project, create a typed project, and verify its file."""
+    return operations.create_project(
+        mesh_file_path,
+        output_path,
+        mesh_map_file_paths,
+        template_file_path,
+        settings,
+        overwrite,
+        replace_current,
+        backup_current_path,
+        backup_mode,
+        overwrite_backup,
+        confirm,
+    )
+
+
+@mcp.tool()
+def get_project_creation_job(job_id: str | None = None) -> dict[str, Any]:
+    """Read terminal state and file verification for an asynchronous project creation."""
+    return operations.get_project_creation_job(job_id)
+
+
+@mcp.tool()
+def save_project(mode: str = "Incremental", confirm: bool = False) -> dict[str, Any]:
+    """Overwrite and verify the current saved project after explicit confirmation."""
+    return operations.save_project(mode, confirm)
+
+
+@mcp.tool()
+def open_project(
+    project_path: str,
+    confirm: bool = False,
+    backup_current_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+) -> dict[str, Any]:
+    """Open an approved .spp, requiring a backup when the current project is dirty."""
+    return operations.open_project(
+        project_path, confirm, backup_current_path, backup_mode, overwrite_backup
+    )
+
+
+@mcp.tool()
+def get_capabilities() -> dict[str, Any]:
+    """Report runtime-supported channels, blend modes, and version-sensitive features."""
+    return operations.capabilities()
+
+
+@mcp.tool()
+def audit_project() -> dict[str, Any]:
+    """Audit texture sets, channels, layer hygiene, and outdated resources."""
+    return operations.audit_project()
+
+
+@mcp.tool()
+def inspect_baking(texture_set: str | None = None) -> dict[str, Any]:
+    """Inspect enabled bakers, UV tiles, and mesh-map assignments without starting a bake."""
+    return operations.inspect_baking(texture_set)
+
+
+@mcp.tool()
+def inspect_baking_parameters(
+    texture_set: str, baker: str | None = None
+) -> dict[str, Any]:
+    """Inspect editable common parameters and one baker's typed property metadata."""
+    return operations.inspect_baking_parameters(texture_set, baker)
+
+
+@mcp.tool()
+def configure_baking(
+    texture_set: str,
+    enabled: bool | None = None,
+    enabled_bakers: list[str] | None = None,
+    enabled_uv_tiles: list[int] | None = None,
+    curvature_method: str | None = None,
+    common_values: dict[str, Any] | None = None,
+    baker_values: dict[str, dict[str, Any]] | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Transactionally configure Texture Set, UV tile, common, and per-baker settings."""
+    return operations.configure_baking(
+        texture_set,
+        enabled,
+        enabled_bakers,
+        enabled_uv_tiles,
+        curvature_method,
+        common_values,
+        baker_values,
+        confirm,
+    )
+
+
+@mcp.tool()
+def set_baking_mesh_inputs(
+    texture_set: str,
+    high_poly_files: list[str] | None = None,
+    cage_file: str | None = None,
+    low_as_high: bool | None = None,
+    cage_mode: str | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Assign sandboxed high-poly/cage meshes and related common baker settings."""
+    return operations.set_baking_mesh_inputs(
+        texture_set,
+        high_poly_files,
+        cage_file,
+        low_as_high,
+        cage_mode,
+        confirm,
+    )
+
+
+@mcp.tool()
+def set_baking_resource_input(
+    texture_set: str,
+    parameter: str,
+    resource_url: str | None = None,
+    baker: str | None = None,
+    clear: bool = False,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Set or clear a Resource-typed common/per-baker input transactionally."""
+    return operations.set_baking_resource_input(
+        texture_set, parameter, resource_url, baker, clear, confirm
+    )
+
+
+@mcp.tool()
+def capture_baking_preset(
+    texture_set: str, bakers: list[str] | None = None
+) -> dict[str, Any]:
+    """Capture a portable JSON baking preset without filesystem-backed properties."""
+    return operations.capture_baking_preset(texture_set, bakers)
+
+
+@mcp.tool()
+def apply_baking_preset(
+    texture_set: str,
+    preset: dict[str, Any],
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Apply a captured baking preset transactionally after explicit confirmation."""
+    return operations.apply_baking_preset(texture_set, preset, confirm)
+
+
+@mcp.tool()
+def preflight_bake(texture_sets: list[str] | None = None) -> dict[str, Any]:
+    """Validate selected Texture Sets, mesh inputs, UV tiles, and expected mesh maps."""
+    return operations.preflight_bake(texture_sets)
+
+
+@mcp.tool()
+def start_batch_bake(
+    texture_sets: list[str],
+    confirm: bool = False,
+    backup_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+) -> dict[str, Any]:
+    """Preflight and start a cancellable multi-Texture-Set bake with result manifests."""
+    return operations.start_batch_bake(
+        texture_sets, confirm, backup_path, backup_mode, overwrite_backup
+    )
+
+
+@mcp.tool()
+def start_bake(
+    texture_set: str,
+    confirm: bool = False,
+    backup_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+) -> dict[str, Any]:
+    """Start an asynchronous mesh-map bake after explicit confirmation."""
+    return operations.start_bake(
+        texture_set, confirm, backup_path, backup_mode, overwrite_backup
+    )
+
+
+@mcp.tool()
+def get_bake_job(job_id: str | None = None) -> dict[str, Any]:
+    """Return progress and terminal status for the latest or selected bake job."""
+    return operations.get_bake_job(job_id)
+
+
+@mcp.tool()
+def cancel_bake(job_id: str) -> dict[str, Any]:
+    """Request cooperative cancellation of a running bake job."""
+    return operations.cancel_bake(job_id)
+
+
+@mcp.tool()
+def plan_mesh_reload(
+    mesh_file_path: str,
+    backup_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+    preserve_strokes: bool = True,
+    import_cameras: bool = True,
+    auto_unwrap_settings: dict[str, Any] | None = None,
+    mesh_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate a mesh reload and preview texture-set and backup impact."""
+    return operations.plan_mesh_reload(
+        mesh_file_path,
+        backup_path,
+        backup_mode,
+        overwrite_backup,
+        preserve_strokes,
+        import_cameras,
+        auto_unwrap_settings,
+        mesh_settings,
+    )
+
+
+@mcp.tool()
+def start_mesh_reload(
+    mesh_file_path: str,
+    confirm: bool = False,
+    backup_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+    preserve_strokes: bool = True,
+    import_cameras: bool = True,
+    auto_unwrap_settings: dict[str, Any] | None = None,
+    mesh_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Back up and asynchronously reload a mesh after explicit confirmation."""
+    return operations.start_mesh_reload(
+        mesh_file_path,
+        confirm,
+        backup_path,
+        backup_mode,
+        overwrite_backup,
+        preserve_strokes,
+        import_cameras,
+        auto_unwrap_settings,
+        mesh_settings,
+    )
+
+
+@mcp.tool()
+def get_mesh_reload_job(job_id: str | None = None) -> dict[str, Any]:
+    """Return status and texture-set changes for the latest mesh reload job."""
+    return operations.get_mesh_reload_job(job_id)
+
+
+@mcp.tool()
+def list_layers(texture_set: str | None = None, recursive: bool = True) -> dict[str, Any]:
+    """List layers with stable UIDs, types, visibility, and optional group children."""
+    return operations.list_layers(texture_set=texture_set, recursive=recursive)
+
+
+@mcp.tool()
+def find_layers(
+    query: str = "",
+    node_type: str | None = None,
+    visible: bool | None = None,
+    texture_set: str | None = None,
+) -> dict[str, Any]:
+    """Search layers by partial name, exact node type, and visibility."""
+    return operations.find_layers(query, node_type, visible, texture_set)
+
+
+@mcp.tool()
+def snapshot_layer_tree(texture_set: str | None = None) -> dict[str, Any]:
+    """Capture a detailed layer/effect snapshot with a deterministic SHA-256 digest."""
+    return operations.snapshot_layer_tree(texture_set)
+
+
+@mcp.tool()
+def diff_layer_snapshots(
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare two layer snapshots by UID and report added, removed, and changed nodes."""
+    return operations.diff_layer_snapshots(before, after)
+
+
+@mcp.tool()
+def get_geometry_mask(uid: int) -> dict[str, Any]:
+    """Inspect a layer's Mesh/UVTile geometry mask and available elements."""
+    return operations.get_geometry_mask(uid)
+
+
+@mcp.tool()
+def set_geometry_mask(
+    uid: int,
+    mask_type: str,
+    elements: list[str | int],
+    inclusion_list: bool = True,
+) -> dict[str, Any]:
+    """Set a geometry mask using mesh names or standard UDIM numbers."""
+    return operations.set_geometry_mask(uid, mask_type, elements, inclusion_list)
+
+
+@mcp.tool()
+def create_fill_layer(
+    name: str,
+    texture_set: str | None = None,
+    base_color: list[float] | None = None,
+    position: str = "top",
+    reference_uid: int | None = None,
+) -> dict[str, Any]:
+    """Create a Fill Layer, optionally with sRGB base color [r,g,b].
+
+    position is top, or above, below or inside reference_uid.
+    """
+    return operations.create_fill_layer(name, texture_set, base_color, position, reference_uid)
+
+
+@mcp.tool()
+def create_group(
+    name: str,
+    texture_set: str | None = None,
+    position: str = "top",
+    reference_uid: int | None = None,
+) -> dict[str, Any]:
+    """Create a layer group at the top, or above, below or inside reference_uid."""
+    return operations.create_group(name, texture_set, position, reference_uid)
+
+
+@mcp.tool()
+def create_paint_layer(
+    name: str,
+    texture_set: str | None = None,
+    position: str = "top",
+    reference_uid: int | None = None,
+) -> dict[str, Any]:
+    """Create a Paint Layer at the top, or above, below or inside reference_uid."""
+    return operations.create_paint_layer(name, texture_set, position, reference_uid)
+
+
+@mcp.tool()
+def plan_layer_recipe(
+    recipe: list[dict[str, Any]],
+    texture_set: str | None = None,
+    backup_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+) -> dict[str, Any]:
+    """Validate a recipe, resolve channels, and preview backup/mutation scope without editing."""
+    return operations.plan_layer_recipe(
+        recipe, texture_set, backup_path, backup_mode, overwrite_backup
+    )
+
+
+@mcp.tool()
+def create_layer_recipe(
+    recipe: list[dict[str, Any]],
+    texture_set: str | None = None,
+    backup_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+) -> dict[str, Any]:
+    """Create a nested recipe atomically, optionally saving an approved .spp backup first."""
+    return operations.create_layer_recipe(
+        recipe, texture_set, backup_path, backup_mode, overwrite_backup
+    )
+
+
+@mcp.tool()
+def insert_smart_material(
+    resource_url: str,
+    texture_set: str | None = None,
+    parent_uid: int | None = None,
+    name: str | None = None,
+    position: str = "top",
+    reference_uid: int | None = None,
+) -> dict[str, Any]:
+    """Insert a Smart Material at the top, inside parent_uid, or relative to reference_uid."""
+    return operations.insert_smart_material(
+        resource_url, texture_set, parent_uid, name, position, reference_uid
+    )
+
+
+@mcp.tool()
+def apply_smart_mask(uid: int, resource_url: str) -> dict[str, Any]:
+    """Apply a Smart Mask resource to a layer using transactional mask insertion."""
+    return operations.apply_smart_mask(uid, resource_url)
+
+
+@mcp.tool()
+def set_fill_base_color(uid: int, color: list[float]) -> dict[str, Any]:
+    """Set a Fill Layer's base color using its UID and sRGB [r,g,b] values."""
+    return operations.set_fill_base_color(uid, color)
+
+
+@mcp.tool()
+def get_fill_projection(uid: int) -> dict[str, Any]:
+    """Inspect a Fill layer's projection mode and common UV transformation."""
+    return operations.get_fill_projection(uid)
+
+
+@mcp.tool()
+def get_fill_sources(uid: int) -> dict[str, Any]:
+    """Inspect a Fill layer's material or per-channel color/resource sources."""
+    return operations.get_fill_sources(uid)
+
+
+@mcp.tool()
+def get_procedural_inputs(uid: int, channel: str | None = None) -> dict[str, Any]:
+    """Inspect image inputs on Fill, Fill Effect, Generator, or Filter sources."""
+    return operations.get_procedural_inputs(uid, channel)
+
+
+@mcp.tool()
+def set_procedural_input(
+    uid: int,
+    input_name: str,
+    resource_url: str | None = None,
+    channel: str | None = None,
+    reset: bool = False,
+) -> dict[str, Any]:
+    """Connect a resource to a procedural image input or reset it to its default."""
+    return operations.set_procedural_input(uid, input_name, resource_url, channel, reset)
+
+
+@mcp.tool()
+def get_fill_parameters(uid: int, channel: str | None = None) -> dict[str, Any]:
+    """Inspect parameters and presets of a Fill, Fill Effect, Generator or Filter.
+
+    Use it to tune generators such as edge wear. Effect UIDs come from snapshot_layer_tree.
+    """
+    return operations.get_fill_parameters(uid, channel)
+
+
+@mcp.tool()
+def set_fill_parameters(
+    uid: int,
+    values: dict[str, Any],
+    channel: str | None = None,
+) -> dict[str, Any]:
+    """Update parameters of a Fill, Fill Effect, Generator or Filter; rolls back on failure."""
+    return operations.set_fill_parameters(uid, values, channel)
+
+
+@mcp.tool()
+def apply_fill_preset(
+    uid: int, preset: str, channel: str | None = None
+) -> dict[str, Any]:
+    """Apply a named preset of a Fill, Fill Effect, Generator or Filter source."""
+    return operations.apply_fill_preset(uid, preset, channel)
+
+
+@mcp.tool()
+def list_anchor_points(texture_set: str | None = None) -> dict[str, Any]:
+    """List Anchor Point effects with owner and Texture Set context."""
+    return operations.list_anchor_points(texture_set)
+
+
+@mcp.tool()
+def set_fill_anchor_source(
+    uid: int,
+    anchor_uid: int,
+    channel: str | None = None,
+    material_mode: bool = False,
+) -> dict[str, Any]:
+    """Connect an Anchor Point to one Fill channel or the complete material source."""
+    return operations.set_fill_anchor_source(uid, anchor_uid, channel, material_mode)
+
+
+@mcp.tool()
+def set_fill_resource(
+    uid: int,
+    resource_url: str,
+    channel: str | None = None,
+    material_mode: bool = False,
+) -> dict[str, Any]:
+    """Assign a Painter resource to one Fill channel, a whole material or a mask Fill.
+
+    A Fill inside a mask has no channels, so leave channel out for one.
+    """
+    return operations.set_fill_resource(uid, resource_url, channel, material_mode)
+
+
+@mcp.tool()
+def set_fill_projection(
+    uid: int,
+    mode: str,
+    scale: list[float] | None = None,
+    rotation: float | None = None,
+    offset: list[float] | None = None,
+) -> dict[str, Any]:
+    """Set Fill, UV, or Triplanar projection with transactional transform updates."""
+    return operations.set_fill_projection(uid, mode, scale, rotation, offset)
+
+
+@mcp.tool()
+def set_fill_projection_advanced(
+    uid: int,
+    mode: str,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Configure UV, triplanar, planar, spherical, or cylindrical projection details."""
+    return operations.set_fill_projection_advanced(uid, mode, settings)
+
+
+@mcp.tool()
+def set_fill_channels(
+    uid: int,
+    values: dict[str, float | list[float]],
+) -> dict[str, Any]:
+    """Set and enable multiple uniform Fill channels, such as Roughness or Metallic."""
+    return operations.set_fill_channels(uid, values)
+
+
+@mcp.tool()
+def set_active_channels(uid: int, channels: list[str]) -> dict[str, Any]:
+    """Replace a Fill or Paint layer's active channel set by UID."""
+    return operations.set_active_channels(uid, channels)
+
+
+@mcp.tool()
+def set_layer_mask(uid: int, enabled: bool, background: str = "Black") -> dict[str, Any]:
+    """Add/update or remove a layer mask; backgrounds are reported by get_capabilities."""
+    return operations.set_layer_mask(uid, enabled, background)
+
+
+@mcp.tool()
+def insert_mask_effect(
+    uid: int,
+    effect_type: str,
+    resource_url: str | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Insert Fill, Paint, Generator, Filter, Levels, Anchor, or Smart Mask into a mask."""
+    return operations.insert_mask_effect(uid, effect_type, resource_url, name)
+
+
+@mcp.tool()
+def insert_content_effect(
+    uid: int,
+    effect_type: str,
+    resource_url: str | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Insert Fill, Paint, Generator, Filter, Levels or Anchor into a layer's content."""
+    return operations.insert_mask_effect(uid, effect_type, resource_url, name, "Content")
+
+
+@mcp.tool()
+def set_levels(
+    uid: int,
+    input_min: float | None = None,
+    input_max: float | None = None,
+    gamma: float | None = None,
+    output_min: float | None = None,
+    output_max: float | None = None,
+    clamp: bool | None = None,
+    channel: str | None = None,
+) -> dict[str, Any]:
+    """Tune a Levels effect, for example to push a mask's contrast.
+
+    channel picks what a content Levels affects, such as BaseColor or Roughness.
+    """
+    return operations.set_levels(
+        uid, input_min, input_max, gamma, output_min, output_max, clamp, channel
+    )
+
+
+@mcp.tool()
+def rename_layer(uid: int, name: str) -> dict[str, Any]:
+    """Rename a layer or group by UID."""
+    return operations.rename_layer(uid, name)
+
+
+@mcp.tool()
+def set_layer_properties(
+    uid: int,
+    visible: bool | None = None,
+    opacity: float | None = None,
+    blending_mode: str | None = None,
+    channel: str | None = None,
+) -> dict[str, Any]:
+    """Set visibility, opacity, or blend mode; channel defaults to BaseColor."""
+    return operations.set_layer_properties(uid, visible, opacity, blending_mode, channel)
+
+
+@mcp.tool()
+def select_layers(uids: list[int]) -> dict[str, Any]:
+    """Select one or more layers in Painter by UID."""
+    return operations.select_layers(uids)
+
+
+@mcp.tool()
+def list_export_presets() -> dict[str, Any]:
+    """List built-in and shelf export presets without exporting files."""
+    return operations.list_export_presets()
+
+
+@mcp.tool()
+def inspect_export_preset(
+    preset: str,
+    texture_set: str | None = None,
+) -> dict[str, Any]:
+    """Resolve an export preset and preview its map names without writing files."""
+    return operations.inspect_export_preset(preset, texture_set)
+
+
+@mcp.tool()
+def list_export_profiles() -> dict[str, Any]:
+    """List curated engine export profiles and whether their Painter presets are available."""
+    return operations.list_export_profiles()
+
+
+@mcp.tool()
+def plan_texture_export(
+    output_directory: str,
+    preset: str,
+    texture_sets: list[str] | None = None,
+    size_log2: int | None = None,
+    file_format: str | None = None,
+    bit_depth: str | None = None,
+) -> dict[str, Any]:
+    """Validate an export and list exact output files without writing them."""
+    return operations.plan_texture_export(
+        output_directory, preset, texture_sets, size_log2, file_format, bit_depth
+    )
+
+
+@mcp.tool()
+def export_textures(
+    output_directory: str,
+    preset: str,
+    texture_sets: list[str] | None = None,
+    size_log2: int | None = None,
+    file_format: str | None = None,
+    bit_depth: str | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Export textures inside SP_MCP_EXPORT_ROOTS and verify every output file."""
+    return operations.export_textures(
+        output_directory,
+        preset,
+        texture_sets,
+        size_log2,
+        file_format,
+        bit_depth,
+        overwrite,
+    )
+
+
+@mcp.tool()
+def plan_profile_export(
+    output_directory: str,
+    profile: str,
+    texture_sets: list[str] | None = None,
+    size_log2: int | None = None,
+) -> dict[str, Any]:
+    """Preview an engine-profile texture export without writing files."""
+    return operations.plan_profile_export(output_directory, profile, texture_sets, size_log2)
+
+
+@mcp.tool()
+def export_with_profile(
+    output_directory: str,
+    profile: str,
+    texture_sets: list[str] | None = None,
+    size_log2: int | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Run a curated export profile inside SP_MCP_EXPORT_ROOTS and verify outputs."""
+    return operations.export_with_profile(
+        output_directory, profile, texture_sets, size_log2, overwrite
+    )
+
+
+@mcp.tool()
+def import_project_resource(
+    file_path: str,
+    usage: str,
+    name: str | None = None,
+    group: str | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Import and verify a sandboxed resource inside the open Painter project."""
+    return operations.import_project_resource(file_path, usage, name, group, confirm)
+
+
+@mcp.tool()
+def list_shelves() -> dict[str, Any]:
+    """List Painter shelves with paths, write capability, and crawling state."""
+    return operations.list_shelves()
+
+
+@mcp.tool()
+def import_shelf_resource(
+    file_path: str,
+    usage: str,
+    shelf_name: str | None = None,
+    name: str | None = None,
+    group: str | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Import and verify a safe resource in an editable shelf or the user shelf."""
+    return operations.import_shelf_resource(
+        file_path, usage, shelf_name, name, group, confirm
+    )
+
+
+@mcp.tool()
+def start_shelf_refresh(shelf_name: str, confirm: bool = False) -> dict[str, Any]:
+    """Start event-observed discovery for one Painter shelf after confirmation."""
+    return operations.start_shelf_refresh(shelf_name, confirm)
+
+
+@mcp.tool()
+def get_shelf_refresh_job(job_id: str | None = None) -> dict[str, Any]:
+    """Read persistent state for the latest or selected shelf refresh job."""
+    return operations.get_shelf_refresh_job(job_id)
+
+
+@mcp.tool()
+def import_session_resource(
+    file_path: str,
+    usage: str,
+    name: str | None = None,
+    group: str | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Import and verify a sandboxed resource for the current Painter session."""
+    return operations.import_session_resource(file_path, usage, name, group, confirm)
+
+
+@mcp.tool()
+def list_project_resources() -> dict[str, Any]:
+    """List resources referenced by the open project."""
+    return operations.list_project_resources()
+
+
+@mcp.tool()
+def search_resources(
+    query: str,
+    limit: int = 50,
+    resource_type: str | None = None,
+    usage: str | None = None,
+) -> dict[str, Any]:
+    """Search Painter resources and return identifiers, type, category, and usages.
+
+    query uses Painter's shelf syntax: words such as "rust", or filters such as
+    "u:generator", "u:smartmaterial rust", "u:basematerial" or "p:starter_assets".
+    Underscores in a resource name don't match; search one word of it.
+    """
+    return operations.search_resources(query, limit, resource_type, usage)
+
+
+@mcp.tool()
+def find_outdated_resources() -> dict[str, Any]:
+    """Plan project-resource replacements without modifying the project."""
+    return operations.find_outdated_resources()
+
+
+@mcp.tool()
+def replace_outdated_resources(confirm: bool = False) -> dict[str, Any]:
+    """Atomically replace all outdated resources after explicit confirm=true."""
+    return operations.replace_outdated_resources(confirm)
+
+
+@mcp.tool()
+def save_project_copy(
+    output_path: str,
+    mode: str = "Incremental",
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Save a verified .spp copy inside SP_MCP_PROJECT_ROOTS without relocating the project."""
+    return operations.save_project_copy(output_path, mode, overwrite)
+
+
+@mcp.tool()
+def export_smart_material(
+    uid: int,
+    name: str,
+    output_directory: str,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Export a group as a verified Smart Material inside SP_MCP_EXPORT_ROOTS."""
+    return operations.export_smart_material(uid, name, output_directory, overwrite)
+
+
+@mcp.tool()
+def export_smart_mask(
+    uid: int,
+    name: str,
+    output_directory: str,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Export a layer mask as a verified Smart Mask inside SP_MCP_EXPORT_ROOTS."""
+    return operations.export_smart_mask(uid, name, output_directory, overwrite)
+
+
+@mcp.tool()
+def delete_layer(uid: int) -> dict[str, Any]:
+    """Delete a layer or group by UID. This modifies the open project."""
+    return operations.delete_layer(uid)
+
+
+@mcp.tool()
+def execute_python(code: str) -> dict[str, Any]:
+    """Execute raw Painter Python only when SP_MCP_ALLOW_EXECUTE_PYTHON=1.
+
+    Variables survive between calls. Assign to `result` to return a value; printed
+    text comes back as `output`.
+    """
+    if os.getenv("SP_MCP_ALLOW_EXECUTE_PYTHON") != "1":
+        raise PermissionError(
+            "Raw Python execution is disabled. Set SP_MCP_ALLOW_EXECUTE_PYTHON=1 "
+            "in the MCP server environment to opt in."
+        )
+    return operations.remote.execute_session(code)
+
+
+def main() -> None:
+    mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()
